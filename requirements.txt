@@ -15,3 +15,5 @@ random
 signal
 time
 python-dotenv
+concurrent
+sqlite3
