@@ -38,7 +38,7 @@ BOT_TOKEN = config.BOT_TOKEN
 MISTRAL_API_KEY = config.MISTRAL_API_KEY
 
 # Пути (оставлены как есть, вы измените сами)
-BASE_PATH = '/app/'
+BASE_PATH = os.path.dirname(os.path.abspath(__file__)) + os.sep
 TEMP_DIR = os.path.join(BASE_PATH, "temp")
 COMPLETED_DIR = os.path.join(BASE_PATH, "completed")
 CACHE_DIR = os.path.join(BASE_PATH, "cache")
