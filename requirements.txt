@@ -17,3 +17,5 @@ time
 python-dotenv
 concurrent
 sqlite3
+datetime
+hashlib
