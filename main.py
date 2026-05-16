@@ -32,7 +32,6 @@ os.system('pip install mistralai==1.8.0')
 os.system('pip install python-pptx')
 
 from mistralai import Mistral
-import 
 
 import config
 from cache_storage import PresentationCache
