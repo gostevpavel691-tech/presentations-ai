@@ -588,6 +588,29 @@ class DatabaseManager:
         finally:
             if conn:
                 conn.close()
+
+    def get_users_page(self, page: int = 1, per_page: int = 10) -> List[Dict]:
+        """Возвращает список пользователей для указанной страницы."""
+        conn = None
+        try:
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            offset = (page - 1) * per_page
+            cursor.execute('''
+                SELECT tg_id, username, first_name, total_presentations, registered_at, last_activity
+                FROM users 
+                ORDER BY registered_at DESC
+                LIMIT ? OFFSET ?
+            ''', (per_page, offset))
+            results = cursor.fetchall()
+            return [dict(row) for row in results]
+        except Exception as e:
+            logger.error(f"Ошибка получения страницы пользователей: {e}")
+            return []
+        finally:
+            if conn:
+                conn.close()
     
     def get_premium_count(self) -> int:
         """Получить количество премиум пользователей"""
