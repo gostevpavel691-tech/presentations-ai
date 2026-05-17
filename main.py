@@ -326,7 +326,7 @@ async def premium_purchase_callback(callback_query: types.CallbackQuery):
     
     await callback_query.message.edit_text(
         "💎 Premium навсегда - 100 ₽\n\n"
-        "Для покупки Premium доступа напишите модератору (Платеж через Telegram пока что не работает)\n\n"
+        "Для покупки Premium доступа напишите модератору\n\n"
         "После оплаты вы получите:\n"
         "✅ Неограниченное количество презентаций\n"
         "✅ Приоритетную обработку запросов\n"
@@ -625,18 +625,35 @@ async def list_users(message: Message):
     if not is_admin_or_moderator(user_id):
         return
     
-    users = db_manager.get_all_users(limit=50)
+    page = 1
+    per_page = 10
+    users = db_manager.get_users_page(page, per_page)
+    total_users = db_manager.get_total_users()
+    total_pages = (total_users + per_page - 1) // per_page
+    
     if not users:
         await message.answer("📋 Нет зарегистрированных пользователей")
         return
     
-    text = "👥 Последние пользователи:\n\n"
-    for user in users[:20]:
+    text = f"👥 Пользователи (страница {page}/{total_pages}):\n\n"
+    for user in users:
         username = user.get('username', 'без юзернейма') or 'без юзернейма'
         text += f"• {user['tg_id']} - {username}\n"
         text += f"  Презентаций: {user['total_presentations']}\n"
     
-    await message.answer(text)
+    # Клавиатура пагинации
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[])
+    nav_buttons = []
+    if page > 1:
+        nav_buttons.append(InlineKeyboardButton(text="◀️ Назад", callback_data=f"users_page:{page-1}"))
+    if page < total_pages:
+        nav_buttons.append(InlineKeyboardButton(text="Вперед ▶️", callback_data=f"users_page:{page+1}"))
+    if nav_buttons:
+        keyboard.inline_keyboard.append(nav_buttons)
+    # Кнопка обновления (текущая страница)
+    keyboard.inline_keyboard.append([InlineKeyboardButton(text=f"🔄 Страница {page}", callback_data=f"users_page:{page}")])
+    
+    await message.answer(text, reply_markup=keyboard)
 
 @dp.message(Command("moders"))
 async def list_moderators(message: Message):
@@ -1195,6 +1212,52 @@ async def retry_fix_callback(callback_query: types.CallbackQuery):
                 process_presentation_request(target_user_id, retry_request, callback_query.message)
             )
 
+@dp.callback_query(lambda c: c.data and c.data.startswith("users_page:"))
+async def users_pagination_callback(callback_query: types.CallbackQuery):
+    user_id = callback_query.from_user.id
+    # Проверяем права доступа (только админы и модераторы)
+    if not is_admin_or_moderator(user_id):
+        await callback_query.answer("❌ У вас нет прав для просмотра списка пользователей", show_alert=True)
+        return
+    
+    try:
+        page = int(callback_query.data.split(":")[1])
+    except (IndexError, ValueError):
+        page = 1
+    
+    per_page = 10
+    users = db_manager.get_users_page(page, per_page)
+    total_users = db_manager.get_total_users()
+    total_pages = (total_users + per_page - 1) // per_page
+    
+    if not users and page != 1:
+        # Если на запрошенной странице нет пользователей, показываем последнюю существующую
+        page = total_pages
+        users = db_manager.get_users_page(page, per_page)
+    
+    if not users:
+        await callback_query.message.edit_text("📋 Нет зарегистрированных пользователей")
+        await callback_query.answer()
+        return
+    
+    text = f"👥 Пользователи (страница {page}/{total_pages}):\n\n"
+    for user in users:
+        username = user.get('username', 'без юзернейма') or 'без юзернейма'
+        text += f"• {user['tg_id']} - {username}\n"
+        text += f"  Презентаций: {user['total_presentations']}\n"
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[])
+    nav_buttons = []
+    if page > 1:
+        nav_buttons.append(InlineKeyboardButton(text="◀️ Назад", callback_data=f"users_page:{page-1}"))
+    if page < total_pages:
+        nav_buttons.append(InlineKeyboardButton(text="Вперед ▶️", callback_data=f"users_page:{page+1}"))
+    if nav_buttons:
+        keyboard.inline_keyboard.append(nav_buttons)
+    keyboard.inline_keyboard.append([InlineKeyboardButton(text=f"🔄 Страница {page}", callback_data=f"users_page:{page}")])
+    
+    await callback_query.message.edit_text(text, reply_markup=keyboard)
+    await callback_query.answer()
 
 # ==================== GRACEFUL SHUTDOWN ====================
 async def shutdown():
