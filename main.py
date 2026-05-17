@@ -985,7 +985,7 @@ async def privileges_button(message: Message):
     
     await message.answer(
         "✨ Привилегии пользования ботом ✨\n\n"
-        "Premium навсегда - 100 ₽\n\n"
+        "💎 Premium навсегда - 100 ₽\n\n"
         "Преимущества Premium:\n"
         "• 💲 Очень выгодное решение!\n"
         "• 📈 Неограниченное количество презентаций\n"
