@@ -43,10 +43,11 @@ MISTRAL_API_KEY = config.MISTRAL_API_KEY
 
 # Пути (оставлены как есть, вы измените сами)
 BASE_PATH = os.path.dirname(os.path.abspath(__file__)) + os.sep
-TEMP_DIR = os.path.join(BASE_PATH, "temp")
-COMPLETED_DIR = os.path.join(BASE_PATH, "completed")
-CACHE_DIR = os.path.join(BASE_PATH, "cache")
-DB_PATH = os.path.join(BASE_PATH, "users.db")
+DATA_PATH = BASE_PATH + "data" + os.sep
+TEMP_DIR = os.path.join(DATA_PATH, "temp")
+COMPLETED_DIR = os.path.join(DATA_PATH, "completed")
+CACHE_DIR = os.path.join(DATA_PATH, "cache")
+DB_PATH = os.path.join(DATA_PATH, "users.db")
 
 # Создаём папки
 for dir_path in [TEMP_DIR, COMPLETED_DIR, CACHE_DIR]:
