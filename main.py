@@ -28,7 +28,7 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import Message, FSInputFile, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, InlineKeyboardMarkup, InlineKeyboardButton
 
-os.system('pip install mistralai==1.8.0')
+#os.system('pip install mistralai==1.8.0')
 os.system('pip install python-pptx')
 
 from mistralai import Mistral
