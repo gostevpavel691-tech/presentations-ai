@@ -326,7 +326,7 @@ async def premium_purchase_callback(callback_query: types.CallbackQuery):
     
     await callback_query.message.edit_text(
         "💎 Premium навсегда - 100 ₽\n\n"
-        "Для покупки Premium доступа напишите модератору\n\n"
+        "Для покупки Premium доступа напишите модератору (Платеж через Telegram пока что не работает)\n\n"
         "После оплаты вы получите:\n"
         "✅ Неограниченное количество презентаций\n"
         "✅ Приоритетную обработку запросов\n"
