@@ -130,7 +130,7 @@ def check_dependencies():
 def get_main_keyboard():
     keyboard = ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="➕ Создать")],
+            [KeyboardButton(text="🆕 Создать")],
             [KeyboardButton(text="👑 Привилегии"), KeyboardButton(text="👤 Мой профиль")]
         ],
         resize_keyboard=True,
