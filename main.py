@@ -392,8 +392,8 @@ async def moderator_help(message: Message):
 
 🛡️ КОМАНДЫ МОДЕРАТОРОВ:
 
-`/prem <tg_id> [forever|month|year]` - Выдать премиум
-`/unprem <tg_id>` - Снять премиум
+`/prem <tg_id>/<username> [forever|month|year]` - Выдать премиум
+`/unprem <tg_id>/<username>` - Снять премиум
 `/stats` - Полная статистика бота
 `/status` - Статус системы (очередь, задачи)
 `/moders` - Список модераторов
@@ -450,6 +450,21 @@ async def delete_user(message: Message):
     except ValueError:
         await message.answer("❌ Неверный ID пользователя")
 
+async def resolve_user(arg: str) -> tuple[int | None, str]:
+    """
+    Принимает строку — либо числовой tg_id, либо @username / username.
+    Возвращает (tg_id, error_message). Если ошибки нет — error_message пустой.
+    """
+    # Если число — это tg_id
+    if arg.lstrip('-').isdigit():
+        return int(arg), ""
+    # Иначе ищем по username в БД
+    username = arg.lstrip('@')
+    tg_id = db_manager.get_tg_id_by_username(username)
+    if tg_id is None:
+        return None, f"❌ Пользователь @{username} не найден в базе.\nОн должен хотя бы раз написать боту."
+    return tg_id, ""
+
 @dp.message(Command("prem"))
 async def give_premium(message: Message):
     user_id = message.from_user.id
@@ -458,27 +473,27 @@ async def give_premium(message: Message):
     
     args = message.text.split()
     if len(args) < 2:
-        await message.answer("❌ Использование: /prem <tg_id> [forever|month|year]")
+        await message.answer("❌ Использование: /prem <tg_id или @username> [forever|month|year]")
         return
     
-    try:
-        tg_id = int(args[1])
-        duration = args[2] if len(args) > 2 else 'forever'
-        
-        if duration not in ['forever', 'month', 'year']:
-            await message.answer("❌ Тип должен быть: forever, month или year")
-            return
-        
-        if db_manager.add_premium(tg_id, message.from_user.id, duration):
-            try:
-                await bot.send_message(tg_id, "🎉 Вы получили Premium доступ!")
-            except:
-                pass
-            await message.answer(f"✅ Premium выдан пользователю {tg_id}")
-        else:
-            await message.answer("❌ Ошибка выдачи премиум")
-    except ValueError:
-        await message.answer("❌ Неверный ID пользователя")
+    tg_id, error = await resolve_user(args[1])
+    if error:
+        await message.answer(error)
+        return
+
+    duration = args[2] if len(args) > 2 else 'forever'
+    if duration not in ['forever', 'month', 'year']:
+        await message.answer("❌ Тип должен быть: forever, month или year")
+        return
+    
+    if db_manager.add_premium(tg_id, message.from_user.id, duration):
+        try:
+            await bot.send_message(tg_id, "🎉 Вы получили Premium доступ!")
+        except:
+            pass
+        await message.answer(f"✅ Premium выдан пользователю {tg_id}")
+    else:
+        await message.answer("❌ Ошибка выдачи премиум")
 
 @dp.message(Command("unprem"))
 async def remove_premium(message: Message):
@@ -488,21 +503,22 @@ async def remove_premium(message: Message):
     
     args = message.text.split()
     if len(args) < 2:
-        await message.answer("❌ Использование: /unprem <tg_id>")
+        await message.answer("❌ Использование: /unprem <tg_id или @username>")
         return
     
-    try:
-        tg_id = int(args[1])
-        if db_manager.remove_premium(tg_id):
-            try:
-                await bot.send_message(tg_id, "⚠️ Ваш Premium доступ был отключен")
-            except:
-                pass
-            await message.answer(f"✅ Premium снят с пользователя {tg_id}")
-        else:
-            await message.answer("❌ Ошибка снятия премиум")
-    except ValueError:
-        await message.answer("❌ Неверный ID пользователя")
+    tg_id, error = await resolve_user(args[1])
+    if error:
+        await message.answer(error)
+        return
+
+    if db_manager.remove_premium(tg_id):
+        try:
+            await bot.send_message(tg_id, "⚠️ Ваш Premium доступ был отключен")
+        except:
+            pass
+        await message.answer(f"✅ Premium снят с пользователя {tg_id}")
+    else:
+        await message.answer("❌ Ошибка снятия премиум")
 
 @dp.message(Command("setpremoper"))
 async def set_premium_operator(message: Message):
@@ -672,9 +688,10 @@ async def list_moderators(message: Message):
     for mod in moderators:
         username = mod.get('username', 'без юзернейма') or 'без юзернейма'
         marker = " ⭐ (по умолчанию)" if mod['tg_id'] == default_moderator else ""
-        text += f"• {mod['tg_id']} - {username}{marker}\n"
+        tg_id_link = f'<a href="tg://user?id={mod["tg_id"]}">{mod["tg_id"]}</a>'
+        text += f"• {tg_id_link} - {username}{marker}\n"
     
-    await message.answer(text)
+    await message.answer(text, parse_mode='HTML')
 
 @dp.message(Command("status"))
 async def cmd_status(message: Message):
@@ -750,6 +767,9 @@ async def process_presentation_request(user_id, request, message):
             global active_tasks
             if active_tasks > 0:
                 active_tasks -= 1
+            # Снимаем флаг генерации — пользователь снова может отправить запрос
+            if user_states.get(user_id) == "generating":
+                user_states[user_id] = "waiting_for_prompt"
             logger.info(f"Задача завершена. Активных задач: {active_tasks}")
             
             # Берем следующую задачу из очереди, если есть
@@ -757,6 +777,7 @@ async def process_presentation_request(user_id, request, message):
                 try:
                     next_user_id, next_request, next_msg = await task_queue.get()
                     active_tasks += 1
+                    user_states[next_user_id] = "generating"
                     logger.info(f"Запускаем следующую задачу из очереди для пользователя {next_user_id}")
                     asyncio.create_task(process_presentation_request(next_user_id, next_request, next_msg))
                 except Exception as e:
@@ -796,8 +817,6 @@ async def _process_presentation_request_internal(user_id, request, message):
                 )
                 db_manager.increment_presentations(user_id)
                 db_manager.add_presentation_history(user_id, request)
-                # Оставляем пользователя в режиме ввода
-                user_states[user_id] = "waiting_for_prompt"
                 return
         except Exception as e:
             logger.error(f"Ошибка при проверке кэша: {e}")
@@ -860,8 +879,6 @@ async def _process_presentation_request_internal(user_id, request, message):
                 "Нажмите «🔧 Исправить», чтобы ИИ попытался исправить код автоматически.",
                 reply_markup=retry_keyboard
             )
-            # Пользователь остаётся в waiting_for_prompt — может ввести новый промпт сам
-            user_states[user_id] = "waiting_for_prompt"
             return
         
         # Шаг 3: Сохраняем файл
@@ -896,8 +913,6 @@ async def _process_presentation_request_internal(user_id, request, message):
                 "📝 Введите следующую тему или нажмите «❌ Отмена» для возврата в меню."
             )
         )
-        # Оставляем пользователя в режиме ввода — не выбрасываем в главное меню
-        user_states[user_id] = "waiting_for_prompt"
         
     except Exception as e:
         logger.error(f"Непредвиденная ошибка в _process_presentation_request_internal: {traceback.format_exc()}")
@@ -1083,6 +1098,14 @@ async def process_presentation_request_from_message(message: Message):
     request = message.text.strip()
     # Не сбрасываем user_states[user_id] здесь — состояние управляется внутри генерации
     
+    if user_states.get(user_id) == "generating":
+        await message.answer(
+            "⏳ Подождите — ваша презентация ещё создаётся.\n\n"
+            "Как только она будет готова, вы сможете отправить новый запрос.",
+            reply_markup=get_cancel_keyboard()
+        )
+        return
+
     if len(request) > 500:
         await message.answer(
             "❌ Слишком длинный запрос. Максимум 500 символов.\n\n"
@@ -1117,6 +1140,7 @@ async def process_presentation_request_from_message(message: Message):
     
     async with active_tasks_lock:
         if active_tasks >= max_concurrent_tasks:
+            user_states[user_id] = "generating"
             await task_queue.put((user_id, request, message))
             await status_msg.edit_text(
                 f"⏳ Ваш запрос добавлен в очередь.\n"
@@ -1125,6 +1149,7 @@ async def process_presentation_request_from_message(message: Message):
             )
         else:
             active_tasks += 1
+            user_states[user_id] = "generating"
             asyncio.create_task(process_presentation_request(user_id, request, message))
     
     await asyncio.sleep(3)
@@ -1208,6 +1233,7 @@ async def retry_fix_callback(callback_query: types.CallbackQuery):
             )
         else:
             active_tasks += 1
+            user_states[target_user_id] = "generating"
             asyncio.create_task(
                 process_presentation_request(target_user_id, retry_request, callback_query.message)
             )
