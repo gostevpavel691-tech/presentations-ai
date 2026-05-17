@@ -89,8 +89,12 @@ class DatabaseManager:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
             cursor.execute('''
-                INSERT OR IGNORE INTO users (tg_id, username, first_name, last_activity)
+                INSERT INTO users (tg_id, username, first_name, last_activity)
                 VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(tg_id) DO UPDATE SET
+                    username = excluded.username,
+                    first_name = excluded.first_name,
+                    last_activity = CURRENT_TIMESTAMP
             ''', (tg_id, username, first_name))
             conn.commit()
             return True
@@ -183,6 +187,25 @@ class DatabaseManager:
             if conn:
                 conn.close()
     
+    def get_tg_id_by_username(self, username: str) -> Optional[int]:
+        """Найти tg_id пользователя по username (без @)"""
+        conn = None
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute(
+                'SELECT tg_id FROM users WHERE LOWER(username) = LOWER(?)',
+                (username.lstrip('@'),)
+            )
+            result = cursor.fetchone()
+            return result[0] if result else None
+        except Exception as e:
+            logger.error(f"Ошибка поиска пользователя по username: {e}")
+            return None
+        finally:
+            if conn:
+                conn.close()
+
     def get_total_users(self) -> int:
         """Получить общее количество пользователей"""
         conn = None
