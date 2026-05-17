@@ -28,7 +28,7 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import Message, FSInputFile, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, InlineKeyboardMarkup, InlineKeyboardButton
 
-#os.system('pip install mistralai==1.8.0')
+os.system('pip install mistralai==1.8.0')
 os.system('pip install python-pptx')
 
 from mistralai import Mistral
@@ -161,7 +161,7 @@ INSTRUCTION = """
 - НЕ используй внешние изображения, add_picture и любые картинки — их нет на сервере
 - НЕ используй несуществующие атрибуты: вместо fill.fore_color используй fill.solid() затем fill.fore_color
 - НЕ импортируй сторонние библиотеки кроме pptx и стандартных (os, random, math и т.д.)
-- Для красоты используй: цветные фоны слайдов, градиентные фигуры, цветные прямоугольники, иконки из символов (✓ ★ → и т.д.), красивые шрифты и размеры
+- Для красоты используй: цветные фоны слайдов, градиентны, цветные прямоугольники, иконки из символов (✓ ★ → и т.д.), красивые шрифты и размеры
 
 Отвечай ТОЛЬКО кодом на Python, без объяснений. Код должен быть готов к выполнению.
 Постарайся сделать все без ошибок!
@@ -351,9 +351,9 @@ async def back_to_privileges_callback(callback_query: types.CallbackQuery):
         "Преимущества Premium:\n"
         "• 💲 Очень выгодное решение!\n"
         "• 📈 Неограниченное количество презентаций\n"
-        "• ⚡ Приоритетная обработка запросов\n"
-        "• 🎨 Доступ к эксклюзивным шаблонам\n"
-        "• 🚀 Без лимитов и ограничений\n\n"
+        "• ⚡ Приоритетная обработка запросов!\n"
+        "• 🎨 Улучшенный вид презентаций!\n"
+        "• 🚀 Без лимитов и ограничений!\n\n"
         "Нажмите на кнопку ниже, чтобы приобрести Premium:",
         reply_markup=premium_keyboard
     )
@@ -471,7 +471,7 @@ async def give_premium(message: Message):
         
         if db_manager.add_premium(tg_id, message.from_user.id, duration):
             try:
-                await bot.send_message(tg_id, "🎉 Вам выдан Premium доступ!")
+                await bot.send_message(tg_id, "🎉 Вы получили Premium доступ!")
             except:
                 pass
             await message.answer(f"✅ Premium выдан пользователю {tg_id}")
