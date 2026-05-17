@@ -347,7 +347,7 @@ async def back_to_privileges_callback(callback_query: types.CallbackQuery):
     
     await callback_query.message.edit_text(
         "✨ Привилегии пользования ботом ✨\n\n"
-        "Premium навсегда - 100 ₽\n\n"
+        "💎 Premium навсегда - 100 ₽\n\n"
         "Преимущества Premium:\n"
         "• 💲 Очень выгодное решение!\n"
         "• 📈 Неограниченное количество презентаций\n"
