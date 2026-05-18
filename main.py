@@ -128,11 +128,14 @@ def check_dependencies():
     return True
 
 # ==================== КЛАВИАТУРЫ ====================
+REPORTS_CHAT_ID = -1003967614567
+
 def get_main_keyboard():
     keyboard = ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="➕ Создать")],
-            [KeyboardButton(text="👑 Привилегии"), KeyboardButton(text="👤 Мой профиль")]
+            [KeyboardButton(text="👑 Привилегии"), KeyboardButton(text="👤 Мой профиль")],
+            [KeyboardButton(text="🐛 Сообщить об ошибке")]
         ],
         resize_keyboard=True,
         one_time_keyboard=False
@@ -768,9 +771,6 @@ async def process_presentation_request(user_id, request, message):
             global active_tasks
             if active_tasks > 0:
                 active_tasks -= 1
-            # Снимаем флаг генерации — пользователь снова может отправить запрос
-            if user_states.get(user_id) == "generating":
-                user_states[user_id] = "waiting_for_prompt"
             logger.info(f"Задача завершена. Активных задач: {active_tasks}")
             
             # Берем следующую задачу из очереди, если есть
@@ -778,7 +778,6 @@ async def process_presentation_request(user_id, request, message):
                 try:
                     next_user_id, next_request, next_msg = await task_queue.get()
                     active_tasks += 1
-                    user_states[next_user_id] = "generating"
                     logger.info(f"Запускаем следующую задачу из очереди для пользователя {next_user_id}")
                     asyncio.create_task(process_presentation_request(next_user_id, next_request, next_msg))
                 except Exception as e:
@@ -818,6 +817,8 @@ async def _process_presentation_request_internal(user_id, request, message):
                 )
                 db_manager.increment_presentations(user_id)
                 db_manager.add_presentation_history(user_id, request)
+                # Оставляем пользователя в режиме ввода
+                user_states[user_id] = "waiting_for_prompt"
                 return
         except Exception as e:
             logger.error(f"Ошибка при проверке кэша: {e}")
@@ -880,6 +881,8 @@ async def _process_presentation_request_internal(user_id, request, message):
                 "Нажмите «🔧 Исправить», чтобы ИИ попытался исправить код автоматически.",
                 reply_markup=retry_keyboard
             )
+            # Пользователь остаётся в waiting_for_prompt — может ввести новый промпт сам
+            user_states[user_id] = "waiting_for_prompt"
             return
         
         # Шаг 3: Сохраняем файл
@@ -914,6 +917,8 @@ async def _process_presentation_request_internal(user_id, request, message):
                 "📝 Введите следующую тему или нажмите «❌ Отмена» для возврата в меню."
             )
         )
+        # Оставляем пользователя в режиме ввода — не выбрасываем в главное меню
+        user_states[user_id] = "waiting_for_prompt"
         
     except Exception as e:
         logger.error(f"Непредвиденная ошибка в _process_presentation_request_internal: {traceback.format_exc()}")
@@ -1080,10 +1085,41 @@ async def cancel_button(message: Message):
     user_states[user_id] = None
     await message.answer("✅ Действие отменено", reply_markup=get_main_keyboard())
 
+@dp.message(lambda m: m.text == "🐛 Сообщить об ошибке")
+async def report_button(message: Message):
+    user_id = message.from_user.id
+    user_states[user_id] = "waiting_for_report"
+    await message.answer(
+        "✍️ Опишите ошибку или проблему, и мы постараемся её исправить.\n\n"
+        "Или нажмите «❌ Отмена» для возврата в меню.",
+        reply_markup=get_cancel_keyboard()
+    )
+
 @dp.message()
 async def handle_presentation_prompt(message: Message):
     user_id = message.from_user.id
-    
+
+    if user_states.get(user_id) == "waiting_for_report":
+        report_text = message.text.strip()
+        username = message.from_user.username
+        username_str = f"@{username}" if username else "нет юзернейма"
+
+        report_msg = (
+            f"🐛 <b>Новый репорт об ошибке</b>\n\n"
+            f"<b>От кого:</b> <a href=\"tg://user?id={user_id}\">{user_id}</a>, {username_str}\n"
+            f"<b>Сообщение:</b> {report_text}"
+        )
+
+        try:
+            await bot.send_message(REPORTS_CHAT_ID, report_msg, parse_mode="HTML")
+            await message.answer("✅ Спасибо! Ваш репорт отправлен.", reply_markup=get_main_keyboard())
+        except Exception as e:
+            logger.error(f"Ошибка отправки репорта: {e}")
+            await message.answer("❌ Не удалось отправить репорт. Попробуйте позже.", reply_markup=get_main_keyboard())
+
+        user_states[user_id] = None
+        return
+
     if user_states.get(user_id) == "waiting_for_prompt":
         await process_presentation_request_from_message(message)
     else:
@@ -1099,14 +1135,6 @@ async def process_presentation_request_from_message(message: Message):
     request = message.text.strip()
     # Не сбрасываем user_states[user_id] здесь — состояние управляется внутри генерации
     
-    if user_states.get(user_id) == "generating":
-        await message.answer(
-            "⏳ Подождите — ваша презентация ещё создаётся.\n\n"
-            "Как только она будет готова, вы сможете отправить новый запрос.",
-            reply_markup=get_cancel_keyboard()
-        )
-        return
-
     if len(request) > 500:
         await message.answer(
             "❌ Слишком длинный запрос. Максимум 500 символов.\n\n"
@@ -1141,7 +1169,6 @@ async def process_presentation_request_from_message(message: Message):
     
     async with active_tasks_lock:
         if active_tasks >= max_concurrent_tasks:
-            user_states[user_id] = "generating"
             await task_queue.put((user_id, request, message))
             await status_msg.edit_text(
                 f"⏳ Ваш запрос добавлен в очередь.\n"
@@ -1150,7 +1177,6 @@ async def process_presentation_request_from_message(message: Message):
             )
         else:
             active_tasks += 1
-            user_states[user_id] = "generating"
             asyncio.create_task(process_presentation_request(user_id, request, message))
     
     await asyncio.sleep(3)
@@ -1234,7 +1260,6 @@ async def retry_fix_callback(callback_query: types.CallbackQuery):
             )
         else:
             active_tasks += 1
-            user_states[target_user_id] = "generating"
             asyncio.create_task(
                 process_presentation_request(target_user_id, retry_request, callback_query.message)
             )
