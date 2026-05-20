@@ -1,6 +1,6 @@
 import sqlite3
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, List
 import config
 
@@ -292,7 +292,7 @@ class DatabaseManager:
             result = cursor.fetchone()
             
             if result:
-                oldest_time = datetime.fromisoformat(result[0])
+                oldest_time = datetime.fromisoformat(result[0]).replace(tzinfo=timezone.utc)
                 reset_time = oldest_time + timedelta(hours=hours)
                 return reset_time
             return None
@@ -316,7 +316,7 @@ class DatabaseManager:
         else:
             reset_time = self.get_next_reset_time(tg_id, hours)
             if reset_time:
-                wait_minutes = int((reset_time - datetime.now()).total_seconds() / 60)
+                wait_minutes = int((reset_time - datetime.now(timezone.utc)).total_seconds() / 60)
                 hours_left = wait_minutes // 60
                 minutes_left = wait_minutes % 60
                 if hours_left > 0:
@@ -483,7 +483,7 @@ class DatabaseManager:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
             
-            now = datetime.now()
+            now = datetime.now(timezone.utc)
             end_date = None
             
             if duration == 'month':
@@ -545,8 +545,8 @@ class DatabaseManager:
             end_date = result[0]
             if end_date:
                 try:
-                    end_date_obj = datetime.fromisoformat(end_date)
-                    if datetime.now() > end_date_obj:
+                    end_date_obj = datetime.fromisoformat(end_date).replace(tzinfo=timezone.utc)
+                    if datetime.now(timezone.utc) > end_date_obj:
                         self.remove_premium(tg_id)
                         return False
                 except:
@@ -567,8 +567,8 @@ class DatabaseManager:
             return {
                 'premium_type': 'moderator',
                 'premium_end': None,
-                'premium_start': datetime.now().isoformat(),
-                'given_at': datetime.now().isoformat()
+                'premium_start': datetime.now(timezone.utc).isoformat(),
+                'given_at': datetime.now(timezone.utc).isoformat()
             }
         
         conn = None
