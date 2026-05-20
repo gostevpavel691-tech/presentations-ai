@@ -323,8 +323,8 @@ class DatabaseManager:
                     wait_text = f"{hours_left} ч {minutes_left} мин"
                 else:
                     wait_text = f"{minutes_left} мин"
-                return False, f"лимит исчерпан. Следующая генерация через {wait_text}"
-            return False, "лимит исчерпан"
+                return False, f"Лимит исчерпан. Следующая генерация через {wait_text}"
+            return False, "Лимит исчерпан"
     
     # ============ РАБОТА С МОДЕРАТОРАМИ ============
     def add_moderator(self, tg_id: int, admin_id: int) -> bool:
