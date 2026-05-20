@@ -21,6 +21,7 @@ import traceback
 import random
 import signal
 import time
+
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 import sqlite3
@@ -34,12 +35,14 @@ os.system('pip install python-pptx')
 from mistralai import Mistral
 
 import config
+import consts
 from cache_storage import PresentationCache
 from user_manager import DatabaseManager
 
 # ==================== НАСТРОЙКИ ====================
 BOT_TOKEN = config.BOT_TOKEN
 MISTRAL_API_KEY = config.MISTRAL_API_KEY
+UNSPLASH_ACCESS_KEY = config.UNSPLASH_API_TOKEN
 
 # Пути (оставлены как есть, вы измените сами)
 BASE_PATH = os.path.dirname(os.path.abspath(__file__)) + os.sep
@@ -86,6 +89,7 @@ user_states = {}
 # Словарь для хранения данных повторной генерации (retry по кнопке "Исправить")
 # Формат: { user_id: {"original_request": str, "error_text": str} }
 retry_data = {}
+prem_user_images_enabled = {}  # {user_id: True/False}
 
 # ==================== АНТИ-СПАМ СИСТЕМА ====================
 user_last_action = {}
@@ -142,13 +146,13 @@ def get_main_keyboard():
     )
     return keyboard
 
-def get_cancel_keyboard():
-    keyboard = ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="❌ Отмена")]],
-        resize_keyboard=True,
-        one_time_keyboard=True
-    )
-    return keyboard
+def get_cancel_keyboard(user_id=None):
+    buttons = [[KeyboardButton(text="❌ Отмена")]]
+    if user_id and (db_manager.is_premium(user_id) or db_manager.is_moderator(user_id) or is_admin(user_id)):
+        status = prem_user_images_enabled.get(user_id, True)
+        btn_text = "Изображения включены ✅" if status else "Изображения выключены ⛔"
+        buttons.append([KeyboardButton(text=btn_text)])
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True, one_time_keyboard=False)
 
 def remove_keyboard():
     return ReplyKeyboardRemove()
@@ -167,11 +171,69 @@ INSTRUCTION = """
 - НЕ импортируй сторонние библиотеки кроме pptx и стандартных (os, random, math и т.д.)
 - Для красоты используй: цветные фоны слайдов, градиентны, цветные прямоугольники, иконки из символов (✓ ★ → и т.д.), красивые шрифты и размеры
 
+Не используй символ "→"
 Отвечай ТОЛЬКО кодом на Python, без объяснений. Код должен быть готов к выполнению.
 Постарайся сделать все без ошибок!
 """
 
+INSTRUCTION_PREMIUM = f"""
+Ты — эксперт по созданию презентаций с помощью библиотеки python-pptx.
+
+Твоя задача — заполнить этот шаблон своими данными (заголовками, текстом, списками).
+
+Создай файл "presentation.pptx" в текущей директории.
+
+ВОТ ШАБЛОН, КОТОРЫЙ ТЫ ОБЯЗАН ИСПОЛЬЗОВАТЬ:
+
+{random.choice([consts.TEMPLATE1, consts.TEMPLATE2])}
+
+ПРАВИЛА:
+- В папке с презентацией лежат картинки: img_0.jpg, img_1.jpg, img_2.jpg
+- Замени НАЗВАНИЕ ПРЕЗЕНТАЦИИ, Подзаголовок, ЗАГОЛОВОК СЛАЙДА на свои
+- Замени пункты списка на свои (сохраняя формат "•")
+- Можешь добавить больше слайдов по тому же принципу
+- Можешь использовать разные картинки: img_0.jpg, img_1.jpg, img_2.jpg
+- НЕ используй несуществующие атрибуты: вместо fill.fore_color используй fill.solid()
+- НЕ импортируй сторонние библиотеки кроме pptx, os
+- Для красоты добавляй цветные фоны, градиенты, прямоугольники
+
+Не используй символ "→"
+Отвечай ТОЛЬКО кодом на Python. Код должен быть готов к выполнению.
+ПОСТАРАЙСЯ сделать все без ошибок! Пожалуйста!
+"""
+
 # ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
+async def download_unsplash_images(query: str, work_dir: str, count: int = 3) -> bool:
+    """Скачивает картинки с Unsplash в work_dir. Возвращает True если хоть одна скачалась."""
+    try:
+        import aiohttp
+        url = "https://api.unsplash.com/photos/random"
+        params = {"query": query, "count": count, "orientation": "landscape"}
+        headers = {"Authorization": f"Client-ID {UNSPLASH_ACCESS_KEY}"}
+
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, params=params, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                if resp.status != 200:
+                    logger.error(f"Unsplash API error: {resp.status}")
+                    return False
+                photos = await resp.json()
+
+            downloaded = 0
+            for i, photo in enumerate(photos):
+                img_url = photo["urls"]["regular"]
+                async with session.get(img_url, timeout=aiohttp.ClientTimeout(total=20)) as img_resp:
+                    if img_resp.status == 200:
+                        img_path = os.path.join(work_dir, f"img_{i}.jpg")
+                        with open(img_path, "wb") as f:
+                            f.write(await img_resp.read())
+                        downloaded += 1
+
+        logger.info(f"Unsplash: скачано {downloaded} картинок для запроса '{query}'")
+        return downloaded > 0
+    except Exception as e:
+        logger.error(f"Ошибка загрузки картинок Unsplash: {e}")
+        return False
+
 def extract_python_code(text):
     """Извлекает Python код из ответа Mistral."""
     pattern = r'```python\n(.*?)```'
@@ -334,7 +396,8 @@ async def premium_purchase_callback(callback_query: types.CallbackQuery):
         "После оплаты вы получите:\n"
         "✅ Неограниченное количество презентаций\n"
         "✅ Приоритетную обработку запросов\n"
-        "✅ Доступ к эксклюзивным шаблонам",
+        "✅ Доступ к эксклюзивным шаблонам\n"
+        "✅ Использование картинок в презентациях",
         reply_markup=contact_keyboard
     )
     
@@ -354,6 +417,7 @@ async def back_to_privileges_callback(callback_query: types.CallbackQuery):
         "💎 Premium навсегда - 100 ₽\n\n"
         "Преимущества Premium:\n"
         "• 💲 Очень выгодное решение!\n"
+        "• 🖼️ Использование картинок в презентациях\n"
         "• 📈 Неограниченное количество презентаций\n"
         "• ⚡ Приоритетная обработка запросов!\n"
         "• 🎨 Улучшенный вид презентаций!\n"
@@ -658,7 +722,7 @@ async def list_users(message: Message):
     text = f"👥 Пользователи (страница {page}/{total_pages}):\n\n"
     for user in users:
         username = user.get('username', 'без юзернейма') or 'без юзернейма'
-        text += f"• {user['tg_id']} - {username}\n"
+        text += f"• {user['tg_id']} - <a href='tg://user?id={user['tg_id']}'>{username}</a>\n"
         text += f"  Презентаций: {user['total_presentations']}\n"
     
     # Клавиатура пагинации
@@ -673,7 +737,7 @@ async def list_users(message: Message):
     # Кнопка обновления (текущая страница)
     keyboard.inline_keyboard.append([InlineKeyboardButton(text=f"🔄 Страница {page}", callback_data=f"users_page:{page}")])
     
-    await message.answer(text, reply_markup=keyboard)
+    await message.answer(text, parse_mode='HTML', reply_markup=keyboard)
 
 @dp.message(Command("moders"))
 async def list_moderators(message: Message):
@@ -824,14 +888,29 @@ async def _process_presentation_request_internal(user_id, request, message):
             logger.error(f"Ошибка при проверке кэша: {e}")
             # Продолжаем выполнение, если кэш недоступен
         
+        # Создаём временную папку заранее (нужна для картинок)
+        work_dir = os.path.join(TEMP_DIR, f"{user_id}_{uuid.uuid4().hex}")
+        os.makedirs(work_dir, exist_ok=True)
+
         # Шаг 1: Генерация кода через Mistral
+        is_premium = db_manager.is_premium(user_id) or db_manager.is_moderator(user_id) or is_admin(user_id)
+        images_enabled = prem_user_images_enabled.get(user_id, True)
+
+        # Для премиум — скачиваем картинки с Unsplash
+        images_downloaded = False
+        if is_premium and images_enabled:
+            status_msg = await message.answer("🖼 Подбираю картинки для презентации...")
+            images_downloaded = await download_unsplash_images(request, work_dir, count=3)
+            await status_msg.delete()
+
+        instruction = INSTRUCTION_PREMIUM if (is_premium and images_downloaded) else INSTRUCTION
         status_msg = await message.answer("🔄 Генерирую код презентации...")
-        
+
         def sync_mistral_call():
             return mistral_client.chat.complete(
                 model="mistral-large-latest",
                 messages=[
-                    {"role": "system", "content": INSTRUCTION},
+                    {"role": "system", "content": instruction},
                     {"role": "user", "content": request}
                 ]
             )
@@ -853,10 +932,6 @@ async def _process_presentation_request_internal(user_id, request, message):
         if not python_code:
             await message.answer("❌ Не удалось извлечь код из ответа ИИ")
             return
-        
-        # Создаём временную папку
-        work_dir = os.path.join(TEMP_DIR, f"{user_id}_{uuid.uuid4().hex}")
-        os.makedirs(work_dir, exist_ok=True)
         
         # Шаг 2: Выполнение кода (АСИНХРОННО)
         await message.answer("⚙️ Выполняю код и создаю презентацию...")
@@ -996,14 +1071,14 @@ async def create_presentation_button(message: Message):
                 f"Например:\n"
                 f"Создай презентацию 'Биография Пушкина' на 4 слайда\n"
                 f"❌ Нажмите 'Отмена', чтобы вернуться",
-                reply_markup=get_cancel_keyboard()
+                reply_markup=get_cancel_keyboard(user_id)
             )
         else:
             await message.answer(
                 "📝 Введите тему презентации\n\n"
                 "Опишите, какую презентацию вы хотите получить.\n"
                 "❌ Нажмите 'Отмена', чтобы вернуться",
-                reply_markup=get_cancel_keyboard()
+                reply_markup=get_cancel_keyboard(user_id)
             )
     else:
         await message.answer(
@@ -1027,6 +1102,7 @@ async def privileges_button(message: Message):
         "💎 Premium навсегда - 100 ₽\n\n"
         "Преимущества Premium:\n"
         "• 💲 Очень выгодное решение!\n"
+        "• 🖼️ Использование картинок в презентациях\n"
         "• 📈 Неограниченное количество презентаций\n"
         "• ⚡ Приоритетная обработка запросов\n"
         "• 🚀 Без лимитов и ограничений\n\n"
@@ -1079,6 +1155,12 @@ async def my_profile_button(message: Message):
         profile_text += f"\n💰 Приобретите Premium за 100 ₽\nНажмите '👑 Привилегии'"
     
     await message.answer(profile_text, reply_markup=get_main_keyboard())
+
+@dp.message(lambda m: m.text in ("Изображения включены ✅", "Изображения выключены ⛔"))
+async def toggle_images_button(message: Message):
+    user_id = message.from_user.id
+    prem_user_images_enabled[user_id] = not prem_user_images_enabled.get(user_id, True)
+    await message.answer("✅ Настройка сохранена.", reply_markup=get_cancel_keyboard(user_id))
 
 @dp.message(lambda message: message.text == "❌ Отмена")
 async def cancel_button(message: Message):
@@ -1296,7 +1378,7 @@ async def users_pagination_callback(callback_query: types.CallbackQuery):
     text = f"👥 Пользователи (страница {page}/{total_pages}):\n\n"
     for user in users:
         username = user.get('username', 'без юзернейма') or 'без юзернейма'
-        text += f"• {user['tg_id']} - {username}\n"
+        text += f"• {user['tg_id']} - <a href='tg://user?id={user['tg_id']}'>{username}</a>\n"
         text += f"  Презентаций: {user['total_presentations']}\n"
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[])
@@ -1309,7 +1391,7 @@ async def users_pagination_callback(callback_query: types.CallbackQuery):
         keyboard.inline_keyboard.append(nav_buttons)
     keyboard.inline_keyboard.append([InlineKeyboardButton(text=f"🔄 Страница {page}", callback_data=f"users_page:{page}")])
     
-    await callback_query.message.edit_text(text, reply_markup=keyboard)
+    await callback_query.message.edit_text(text, parse_mode='HTML', reply_markup=keyboard)
     await callback_query.answer()
 
 # ==================== GRACEFUL SHUTDOWN ====================
