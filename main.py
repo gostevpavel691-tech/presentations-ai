@@ -23,7 +23,7 @@ import signal
 import time
 
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import sqlite3
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
@@ -1210,7 +1210,7 @@ async def my_profile_button(message: Message):
     is_admin_user = is_admin(user_id)
     
     presentations_last_5h = db_manager.get_presentations_count_since(user_id, 5)
-    remaining = 3 - presentations_last_5h
+    remaining = config.MAX_PRESENTATIONS_PER_HOUR - presentations_last_5h
     
     profile_text = f"👤 Ваш профиль\n\n"
     profile_text += f"🆔 ID: {user_id}\n"
@@ -1230,7 +1230,7 @@ async def my_profile_button(message: Message):
     elif is_premium:
         profile_text += f"\n👑 Статус: PREMIUM\n🎯 Лимиты: отсутствуют\n✨ Спасибо за поддержку!"
     else:
-        profile_text += f"\n⭐ Статус: Обычный пользователь\n\n🎯 Лимит: {max(0, remaining)} из 3 презентаций\n"
+        profile_text += f"\n⭐ Статус: Обычный пользователь\n\n🎯 Лимит: осталось {max(0, remaining)} из {config.MAX_PRESENTATIONS_PER_HOUR} презентаций\n"
         if remaining <= 0:
             reset_time = db_manager.get_next_reset_time(user_id, 5)
             if reset_time:
@@ -1402,7 +1402,9 @@ async def _do_translate(user_id, file_path, target_language, target_lang_name, m
                                 texts_index.append((slide_i, shape_i, para_i, run_i, run.text))
 
         if not texts_index:
-            await status_msg.edit_text("❌ В презентации не найдено текста для перевода.")
+            await status_msg.edit_text("❌ В презентации не найдено текста для перевода.",
+            reply_markup=get_main_keyboard()
+            )
             return
 
         # Формируем пронумерованный список для Mistral
@@ -1460,12 +1462,15 @@ async def _do_translate(user_id, file_path, target_language, target_lang_name, m
         await status_msg.delete()
         await message.answer_document(
             FSInputFile(output_path),
-            caption=f"✅ Презентация переведена на {target_lang_name}!"
+            caption=f"✅ Презентация переведена на {target_lang_name}!",
+            reply_markup=get_main_keyboard()
         )
 
     except Exception as e:
         logger.error(f"Ошибка перевода для {user_id}: {e}")
-        await status_msg.edit_text("❌ Ошибка при переводе. Попробуйте позже.")
+        await status_msg.edit_text("❌ Ошибка при переводе. Попробуйте позже.",
+        reply_markup=get_main_keyboard()
+        )
     finally:
         async def cleanup():
             await asyncio.sleep(300)
