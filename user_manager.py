@@ -303,7 +303,7 @@ class DatabaseManager:
             if conn:
                 conn.close()
     
-    def can_generate_presentation(self, tg_id: int, max_per_hours: int = 2, hours: int = 5) -> tuple[bool, str]:
+    def can_generate_presentation(self, tg_id: int, max_per_hours: int = config.MAX_PRESENTATIONS_PER_HOUR, hours: int = 5) -> tuple[bool, str]:
         """Проверить, может ли пользователь генерировать презентацию"""
         # Премиум пользователи, модераторы и админы не имеют лимитов
         if self.is_premium(tg_id):

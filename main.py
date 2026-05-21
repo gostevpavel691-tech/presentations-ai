@@ -138,6 +138,7 @@ def get_main_keyboard():
     keyboard = ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="➕ Создать")],
+            [KeyboardButton(text="✏️ Изменить")],
             [KeyboardButton(text="👑 Привилегии"), KeyboardButton(text="👤 Мой профиль")],
             [KeyboardButton(text="🐛 Сообщить об ошибке")]
         ],
@@ -145,6 +146,50 @@ def get_main_keyboard():
         one_time_keyboard=False
     )
     return keyboard
+
+def get_edit_keyboard():
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="🌐 Перевести")],
+            [KeyboardButton(text="❌ Отмена")]
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=False
+    )
+
+def get_translate_wait_keyboard():
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="❌ Отмена")]],
+        resize_keyboard=True,
+        one_time_keyboard=False
+    )
+
+def get_language_keyboard():
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="🇬🇧 Английский"), KeyboardButton(text="🇷🇺 Русский")],
+            [KeyboardButton(text="🇩🇪 Немецкий"),   KeyboardButton(text="🇫🇷 Французский")],
+            [KeyboardButton(text="🇨🇳 Китайский"),  KeyboardButton(text="🇪🇸 Испанский")],
+            [KeyboardButton(text="🇵🇱 Польский"),   KeyboardButton(text="🇯🇵 Японский")],
+            [KeyboardButton(text="❌ Отмена")]
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=False
+    )
+
+LANGUAGES = {
+    "🇬🇧 Английский": "English",
+    "🇷🇺 Русский": "Russian",
+    "🇩🇪 Немецкий": "German",
+    "🇫🇷 Французский": "French",
+    "🇨🇳 Китайский": "Chinese",
+    "🇪🇸 Испанский": "Spanish",
+    "🇵🇱 Польский": "Polish",
+    "🇯🇵 Японский": "Japanese",
+}
+
+# Хранилище загруженных файлов для перевода: {user_id: file_path}
+translate_pending = {}
 
 def get_cancel_keyboard(user_id=None):
     buttons = [[KeyboardButton(text="❌ Отмена")]]
@@ -906,7 +951,7 @@ async def _process_presentation_request_internal(user_id, request, message):
         if not can_generate:
             await message.answer(
                 f"⚠️ Лимит генераций исчерпан!\n\n"
-                f"Вы можете создать до 3 презентаций каждые 5 часов.\n"
+                f"Вы можете создать до 2 презентаций каждые 5 часов.\n"
                 f"⏰ {limit_message}\n\n"
                 f"💎 Приобретите Premium для снятия лимитов: /start → 👑 Привилегии"
             )
@@ -1189,7 +1234,7 @@ async def my_profile_button(message: Message):
         if remaining <= 0:
             reset_time = db_manager.get_next_reset_time(user_id, 5)
             if reset_time:
-                wait_minutes = int((reset_time - datetime.now()).total_seconds() / 60)
+                wait_minutes = int((reset_time - datetime.now(timezone.utc)).total_seconds() / 60)
                 hours_left = wait_minutes // 60
                 minutes_left = wait_minutes % 60
                 if hours_left > 0:
@@ -1221,6 +1266,211 @@ async def report_button(message: Message):
         "Или нажмите «❌ Отмена» для возврата в меню.",
         reply_markup=get_cancel_keyboard()
     )
+
+# ==================== ИЗМЕНИТЬ / ПЕРЕВОД ====================
+
+@dp.message(lambda m: m.text == "✏️ Изменить")
+async def edit_button(message: Message):
+    user_id = message.from_user.id
+
+    can_click, wait_seconds = check_spam(user_id)
+    if not can_click:
+        await message.answer(f"⏳ Подождите {wait_seconds} секунд.", reply_markup=get_main_keyboard())
+        return
+
+    if not await check_sub(message):
+        return
+
+    await message.answer(
+        "✏️ Выберите действие с презентацией:",
+        reply_markup=get_edit_keyboard()
+    )
+
+@dp.message(lambda m: m.text == "🌐 Перевести")
+async def translate_button(message: Message):
+    user_id = message.from_user.id
+
+    if not await check_sub(message):
+        return
+
+    # Проверяем лимит заранее
+    can_generate, limit_message = db_manager.can_generate_presentation(user_id)
+    if not can_generate:
+        await message.answer(
+            f"⚠️ Лимит генераций исчерпан!\n\n⏰ {limit_message}\n\n💎 Приобретите Premium: /start → 👑 Привилегии",
+            reply_markup=get_main_keyboard()
+        )
+        return
+
+    user_states[user_id] = "waiting_for_translate_file"
+    await message.answer(
+        "📎 Отправьте файл презентации (.pptx)\n\n"
+        "Нажмите «❌ Отмена» для возврата.",
+        reply_markup=get_translate_wait_keyboard()
+    )
+
+@dp.message(lambda m: m.document is not None and
+            m.document.file_name is not None and
+            m.document.file_name.lower().endswith(".pptx"))
+async def handle_pptx_upload(message: Message):
+    user_id = message.from_user.id
+
+    if user_states.get(user_id) != "waiting_for_translate_file":
+        await message.answer(
+            "❓ Чтобы перевести презентацию, нажмите ✏️ Изменить → 🌐 Перевести",
+            reply_markup=get_main_keyboard()
+        )
+        return
+
+    # Скачиваем файл
+    try:
+        file = await bot.get_file(message.document.file_id)
+        work_dir = os.path.join(TEMP_DIR, f"translate_{user_id}_{uuid.uuid4().hex}")
+        os.makedirs(work_dir, exist_ok=True)
+        file_path = os.path.join(work_dir, "original.pptx")
+        await bot.download_file(file.file_path, file_path)
+    except Exception as e:
+        logger.error(f"Ошибка загрузки файла от {user_id}: {e}")
+        await message.answer("❌ Не удалось загрузить файл. Попробуйте ещё раз.")
+        return
+
+    translate_pending[user_id] = file_path
+    user_states[user_id] = "waiting_for_translate_lang"
+
+    await message.answer(
+        "✅ Файл получен! Выберите язык перевода:",
+        reply_markup=get_language_keyboard()
+    )
+
+@dp.message(lambda m: m.text in LANGUAGES and
+            user_states.get(m.from_user.id) == "waiting_for_translate_lang")
+async def handle_language_choice(message: Message):
+    user_id = message.from_user.id
+    target_lang_name = message.text
+    target_language = LANGUAGES[target_lang_name]
+    file_path = translate_pending.get(user_id)
+
+    if not file_path or not os.path.exists(file_path):
+        await message.answer(
+            "❌ Файл не найден. Загрузите презентацию заново.",
+            reply_markup=get_main_keyboard()
+        )
+        user_states[user_id] = None
+        translate_pending.pop(user_id, None)
+        return
+
+    # Сразу списываем генерацию
+    can_generate, limit_message = db_manager.can_generate_presentation(user_id)
+    if not can_generate:
+        await message.answer(
+            f"⚠️ Лимит генераций исчерпан!\n\n⏰ {limit_message}\n\n💎 Приобретите Premium: /start → 👑 Привилегии",
+            reply_markup=get_main_keyboard()
+        )
+        user_states[user_id] = None
+        translate_pending.pop(user_id, None)
+        shutil.rmtree(os.path.dirname(file_path), ignore_errors=True)
+        return
+
+    translate_pending.pop(user_id, None)
+    user_states[user_id] = None
+
+    status_msg = await message.answer(
+        f"🌐 Перевожу на {target_lang_name}...\nЭто может занять до минуты.",
+        reply_markup=get_main_keyboard()
+    )
+
+    asyncio.create_task(
+        _do_translate(user_id, file_path, target_language, target_lang_name, message, status_msg)
+    )
+
+async def _do_translate(user_id, file_path, target_language, target_lang_name, message, status_msg):
+    """Основная логика перевода презентации"""
+    try:
+        from pptx import Presentation
+
+        prs = Presentation(file_path)
+
+        # Собираем все тексты с адресами (slide_idx, shape_idx, para_idx, run_idx)
+        texts_index = []  # [(slide_i, shape_i, para_i, run_i, original_text), ...]
+
+        for slide_i, slide in enumerate(prs.slides):
+            for shape_i, shape in enumerate(slide.shapes):
+                if shape.has_text_frame:
+                    for para_i, para in enumerate(shape.text_frame.paragraphs):
+                        for run_i, run in enumerate(para.runs):
+                            if run.text.strip():
+                                texts_index.append((slide_i, shape_i, para_i, run_i, run.text))
+
+        if not texts_index:
+            await status_msg.edit_text("❌ В презентации не найдено текста для перевода.")
+            return
+
+        # Формируем пронумерованный список для Mistral
+        numbered = "\n".join(f"{i}:{entry[4]}" for i, entry in enumerate(texts_index))
+
+        def sync_translate():
+            return mistral_client.chat.complete(
+                model="mistral-large-latest",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            f"Ты профессиональный переводчик. Переведи каждую строку на {target_language}. "
+                            f"Формат входных данных: 'номер:текст'. "
+                            f"Отвечай СТРОГО в том же формате 'номер:перевод', по одной строке на каждый номер. "
+                            f"Без пояснений, без пропусков номеров."
+                        )
+                    },
+                    {"role": "user", "content": numbered}
+                ]
+            )
+
+        response = await asyncio.get_running_loop().run_in_executor(executor, sync_translate)
+        translated_raw = response.choices[0].message.content.strip()
+
+        # Парсим переводы
+        translated_map = {}
+        for line in translated_raw.splitlines():
+            if ":" in line:
+                idx_str, _, text = line.partition(":")
+                try:
+                    translated_map[int(idx_str.strip())] = text.strip()
+                except ValueError:
+                    pass
+
+        # Вставляем переводы обратно
+        for i, (slide_i, shape_i, para_i, run_i, _) in enumerate(texts_index):
+            if i in translated_map:
+                slide = prs.slides[slide_i]
+                shape = slide.shapes[shape_i]
+                run = shape.text_frame.paragraphs[para_i].runs[run_i]
+                run.text = translated_map[i]
+
+        # Сохраняем результат
+        output_path = os.path.join(os.path.dirname(file_path), "translated.pptx")
+        prs.save(output_path)
+
+        # Списываем генерацию (в историю — без кэша)
+        try:
+            db_manager.increment_presentations(user_id)
+            db_manager.add_presentation_history(user_id, f"[ПЕРЕВОД → {target_language}]")
+        except Exception as e:
+            logger.error(f"Ошибка обновления статистики перевода: {e}")
+
+        await status_msg.delete()
+        await message.answer_document(
+            FSInputFile(output_path),
+            caption=f"✅ Презентация переведена на {target_lang_name}!"
+        )
+
+    except Exception as e:
+        logger.error(f"Ошибка перевода для {user_id}: {e}")
+        await status_msg.edit_text("❌ Ошибка при переводе. Попробуйте позже.")
+    finally:
+        async def cleanup():
+            await asyncio.sleep(300)
+            shutil.rmtree(os.path.dirname(file_path), ignore_errors=True)
+        asyncio.create_task(cleanup())
 
 @dp.message()
 async def handle_presentation_prompt(message: Message):
