@@ -169,7 +169,7 @@ INSTRUCTION = """
 - НЕ используй внешние изображения, add_picture и любые картинки — их нет на сервере
 - НЕ используй несуществующие атрибуты: вместо fill.fore_color используй fill.solid() затем fill.fore_color
 - НЕ импортируй сторонние библиотеки кроме pptx и стандартных (os, random, math и т.д.)
-- Для красоты используй: цветные фоны слайдов, градиентны, цветные прямоугольники, иконки из символов (✓ ★ → и т.д.), красивые шрифты и размеры
+- Для красоты используй: цветные фоны слайдов, градиентны, иконки из символов (✓ ★ → и т.д.), красивые шрифты и размеры
 
 Не используй символ "→"
 Отвечай ТОЛЬКО кодом на Python, без объяснений. Код должен быть готов к выполнению.
@@ -455,17 +455,19 @@ async def moderator_help(message: Message):
 `/unmoder <tg_id>` - Снять модератора
 `/clear_cache` - Очистить кэш презентаций
 `/users` - Список всех пользователей
+`/msg <tg_id или username>` - Отправить сообщение пользователю
 
 ═════════════════════════════
 
 🛡️ КОМАНДЫ МОДЕРАТОРОВ:
 
-`/prem <tg_id>/<username> [forever|month|year]` - Выдать премиум
-`/unprem <tg_id>/<username>` - Снять премиум
+`/prem <tg_id или username> [forever|month|year]` - Выдать премиум
+`/unprem <tg_id или username>` - Снять премиум
 `/stats` - Полная статистика бота
 `/status` - Статус системы (очередь, задачи)
 `/moders` - Список модераторов
 `/users` - Список всех пользователей
+`/msg <tg_id или username>` - Отправить сообщение пользователю
 
 ═════════════════════════════
 
@@ -474,6 +476,48 @@ async def moderator_help(message: Message):
 `/mhelp` - Показать эту справку
     """
     await message.answer(help_text, parse_mode="Markdown")
+
+@dp.message(Command("msg"))
+async def send_message_to_user(message: Message):
+    """Отправить сообщение пользователю по tg_id или @username (только для модераторов и админов)"""
+    user_id = message.from_user.id
+    
+    # Проверяем права — если нет прав, просто игнорируем
+    if not is_admin_or_moderator(user_id):
+        return
+    
+    # Разбираем аргументы: /msg <tg_id или @username> <сообщение>
+    args = message.text.split(maxsplit=2)
+    
+    if len(args) < 3:
+        await message.answer(
+            "❌ Использование: /msg <tg_id или @username> <сообщение>\n\n"
+            "Примеры:\n"
+            "/msg 123456789 Привет!\n"
+            "/msg @username Привет, как дела?"
+        )
+        return
+    
+    target_arg = args[1]
+    msg_text = args[2]
+    
+    # Определяем tg_id получателя
+    if target_arg.lstrip('-').isdigit():
+        target_tg_id = int(target_arg)
+    else:
+        username = target_arg.lstrip('@')
+        target_tg_id = db_manager.get_tg_id_by_username(username)
+        if not target_tg_id:
+            await message.answer(f"❌ Пользователь @{username} не найден в базе.")
+            return
+    
+    # Отправляем сообщение
+    try:
+        await bot.send_message(target_tg_id, f"{msg_text}")
+        await message.answer(f"✅ Сообщение отправлено пользователю {target_arg}")
+    except Exception as e:
+        logger.error(f"Ошибка отправки сообщения пользователю {target_tg_id}: {e}")
+        await message.answer(f"❌ Не удалось отправить сообщение. Возможно, пользователь заблокировал бота.")
 
 @dp.message(Command("delete"))
 async def delete_user(message: Message):
