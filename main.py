@@ -1154,11 +1154,10 @@ async def create_presentation_button(message: Message):
     if can_generate:
         if "premium" not in limit_message:
             await message.answer(
-                f"📝 Введите тему презентации\n\n"
+                f"📝 Введите тему презентации\n"
+                f"💎 С премиум вы сильно улучшить презентации! И даже сможете использовать картинки...\n\n"
                 f"ℹ️ У вас осталось {limit_message}\n\n"
                 f"Опишите, какую презентацию вы хотите получить.\n"
-                f"Например:\n"
-                f"Создай презентацию 'Биография Пушкина' на 4 слайда\n"
                 f"❌ Нажмите 'Отмена', чтобы вернуться",
                 reply_markup=get_cancel_keyboard(user_id)
             )
@@ -1173,7 +1172,7 @@ async def create_presentation_button(message: Message):
         await message.answer(
             f"⚠️ Лимит генераций исчерпан!\n\n"
             f"⏰ {limit_message}\n\n"
-            f"💎 Приобретите Premium: /start → 👑 Привилегии",
+            f"💎 Приобретите Premium (очень выгодно): /start → 👑 Привилегии",
             reply_markup=get_main_keyboard()
         )
         user_states[user_id] = None
