@@ -214,7 +214,8 @@ INSTRUCTION = """
 - НЕ используй внешние изображения, add_picture и любые картинки — их нет на сервере
 - НЕ используй несуществующие атрибуты: вместо fill.fore_color используй fill.solid() затем fill.fore_color
 - НЕ импортируй сторонние библиотеки кроме pptx и стандартных (os, random, math и т.д.)
-- Для красоты используй: цветные фоны слайдов, градиентны, иконки из символов (✓ ★ → и т.д.), красивые шрифты и размеры
+- для красоты используй: цветные фоны слайдов, градиентны, иконки из символов (✓ ★ → и т.д. <- по желанию!), красивые шрифты и размеры
+- по желанию можешь использовать разделители под заголовками в виде низких прямоугольников
 
 Не используй символ "→"
 Отвечай ТОЛЬКО кодом на Python, без объяснений. Код должен быть готов к выполнению.
@@ -230,12 +231,13 @@ INSTRUCTION_PREMIUM = f"""
 
 ВОТ ШАБЛОН, КОТОРЫЙ ТЫ ОБЯЗАН ИСПОЛЬЗОВАТЬ:
 
-{random.choice([consts.TEMPLATE1, consts.TEMPLATE2])}
+%s
 
 ПРАВИЛА:
+- по желанию можешь использовать под заголовками разделители в виде прямоугольников низкой высоты
 - В папке с презентацией лежат картинки: img_0.jpg, img_1.jpg, img_2.jpg
 - Замени НАЗВАНИЕ ПРЕЗЕНТАЦИИ, Подзаголовок, ЗАГОЛОВОК СЛАЙДА на свои
-- Замени пункты списка на свои (сохраняя формат "•")
+- Замени пункты списка на свои (сохраняя формат "•") - но это по желанию, можешь не использовать "•" если в этом нет надобности.
 - Можешь добавить больше слайдов по тому же принципу
 - Можешь использовать разные картинки: img_0.jpg, img_1.jpg, img_2.jpg
 - НЕ используй несуществующие атрибуты: вместо fill.fore_color используй fill.solid()
@@ -991,8 +993,8 @@ async def _process_presentation_request_internal(user_id, request, message):
             status_msg = await message.answer("🖼 Подбираю картинки для презентации...")
             images_downloaded = await download_unsplash_images(request, work_dir, count=3)
             await status_msg.delete()
-
-        instruction = INSTRUCTION_PREMIUM if (is_premium and images_downloaded) else INSTRUCTION
+        
+        instruction = INSTRUCTION_PREMIUM % random.choice([consts.TEMPLATE1, consts.TEMPLATE2]) if (is_premium and images_downloaded) else INSTRUCTION
         status_msg = await message.answer("🔄 Генерирую код презентации...")
 
         def sync_mistral_call():
