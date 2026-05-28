@@ -419,14 +419,13 @@ async def subscription_callback(callback_query: types.CallbackQuery):
 async def premium_purchase_callback(callback_query: types.CallbackQuery):
     """Обработка нажатия на кнопку Premium"""
     moderator_id = db_manager.get_contact_moderator()
-    
     if not moderator_id:
         moderator_id = ADMIN_IDS[0] if ADMIN_IDS else None
-    
+
     if moderator_id:
         contact_keyboard = InlineKeyboardMarkup(
             inline_keyboard=[
-                [InlineKeyboardButton(text="✉️ Связаться", url=f"tg://user?id={moderator_id}")],
+                [InlineKeyboardButton(text="✉️ Связаться", callback_data="contact_operator:premium")],
                 [InlineKeyboardButton(text="◀️ Назад", callback_data="back_to_privileges")]
             ]
         )
@@ -436,10 +435,11 @@ async def premium_purchase_callback(callback_query: types.CallbackQuery):
                 [InlineKeyboardButton(text="◀️ Назад", callback_data="back_to_privileges")]
             ]
         )
-    
+
     await callback_query.message.edit_text(
         "💎 Premium навсегда - 100 ₽\n\n"
-        "Для покупки Premium доступа напишите модератору\n\n"
+        "⚠️ Приносим извинения — виртуальная оплата на данный момент недоступна.\n"
+        "Для приобретения Premium свяжитесь с модератором напрямую.\n\n"
         "После оплаты вы получите:\n"
         "✅ Неограниченное количество презентаций\n"
         "✅ Приоритетную обработку запросов\n"
@@ -447,7 +447,7 @@ async def premium_purchase_callback(callback_query: types.CallbackQuery):
         "✅ Использование картинок в презентациях",
         reply_markup=contact_keyboard
     )
-    
+
     await callback_query.answer()
 
 @dp.callback_query(lambda c: c.data == "back_to_privileges")
@@ -474,6 +474,247 @@ async def back_to_privileges_callback(callback_query: types.CallbackQuery):
     )
     
     await callback_query.answer()
+
+# ==================== ЧАТ С ОПЕРАТОРОМ ====================
+# active_chats: {user_id: {"operator_id": int, "privilege": str, "group_msg_id": int}}
+active_chats = {}
+
+PRIVILEGE_NAMES = {
+    "premium": "💎 Premium (100 ₽)",
+}
+
+def get_end_chat_keyboard():
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="🔚 Закончить разговор")]],
+        resize_keyboard=True,
+        one_time_keyboard=False
+    )
+
+@dp.callback_query(lambda c: c.data and c.data.startswith("contact_operator:"))
+async def contact_operator_callback(callback_query: types.CallbackQuery):
+    """Пользователь нажал 'Связаться' — отправляем заявку в группу операторов."""
+    user_id = callback_query.from_user.id
+
+    # Проверяем, нет ли уже активного чата
+    if user_id in active_chats:
+        await callback_query.answer("⚠️ У вас уже есть активный разговор с оператором.", show_alert=True)
+        return
+
+    privilege_key = callback_query.data.split(":", 1)[1]
+    privilege_name = PRIVILEGE_NAMES.get(privilege_key, privilege_key)
+
+    operator_id = db_manager.get_contact_moderator()
+    if not operator_id:
+        operator_id = ADMIN_IDS[0] if ADMIN_IDS else None
+
+    if not operator_id:
+        await callback_query.answer("❌ Оператор не назначен. Попробуйте позже.", show_alert=True)
+        return
+
+    username = callback_query.from_user.username
+    username_str = f"@{username}" if username else "нет юзернейма"
+    now_str = datetime.now().strftime("%d.%m.%Y %H:%M")
+
+    request_text = (
+        f"📩 <b>Новая заявка на разговор</b>\n\n"
+        f"<b>От кого:</b> <a href=\"tg://user?id={user_id}\">{user_id}</a> ({username_str})\n"
+        f"<b>Привилегия:</b> {privilege_name}\n"
+        f"<b>Дата:</b> {now_str}"
+    )
+
+    start_keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="💬 Начать разговор", callback_data=f"start_chat:{user_id}:{privilege_key}")]
+        ]
+    )
+
+    try:
+        group_msg = await bot.send_message(
+            config.PAY_GROUP_ID,
+            request_text,
+            parse_mode="HTML",
+            reply_markup=start_keyboard
+        )
+    except Exception as e:
+        logger.error(f"Ошибка отправки заявки в группу: {e}")
+        await callback_query.answer("❌ Не удалось отправить заявку. Попробуйте позже.", show_alert=True)
+        return
+
+    # Сохраняем ожидающий чат (оператор ещё не принял)
+    active_chats[user_id] = {
+        "operator_id": None,
+        "privilege": privilege_name,
+        "group_msg_id": group_msg.message_id,
+        "status": "pending",
+        "role": "user"
+    }
+
+    await callback_query.answer()
+    await bot.send_message(
+        user_id,
+        "✅ Запрос отправлен!\n\n"
+        "Скоро модератор выйдет на связь — пожалуйста, оставайтесь в чате.\n"
+        "Нажмите кнопку ниже, чтобы отменить.",
+        reply_markup=get_end_chat_keyboard()
+    )
+    user_states[user_id] = "waiting_for_operator"
+
+
+@dp.callback_query(lambda c: c.data and c.data.startswith("start_chat:"))
+async def start_chat_callback(callback_query: types.CallbackQuery):
+    """Оператор нажал 'Начать разговор'."""
+    caller_id = callback_query.from_user.id
+
+    # Проверяем, является ли нажавший текущим оператором
+    current_operator = db_manager.get_contact_moderator()
+    if not current_operator:
+        current_operator = ADMIN_IDS[0] if ADMIN_IDS else None
+
+    if caller_id != current_operator and not is_admin(caller_id):
+        await callback_query.answer("❌ Вы не являетесь текущим оператором.", show_alert=True)
+        return
+
+    parts = callback_query.data.split(":")
+    if len(parts) < 3:
+        await callback_query.answer("❌ Неверные данные.", show_alert=True)
+        return
+
+    try:
+        target_user_id = int(parts[1])
+    except ValueError:
+        await callback_query.answer("❌ Неверный ID пользователя.", show_alert=True)
+        return
+
+    # Проверяем, что заявка ещё активна
+    chat_data = active_chats.get(target_user_id)
+    if not chat_data:
+        await callback_query.answer("⚠️ Заявка уже неактуальна или отменена.", show_alert=True)
+        try:
+            await callback_query.message.edit_reply_markup(reply_markup=None)
+        except:
+            pass
+        return
+
+    if chat_data.get("status") == "active":
+        await callback_query.answer("⚠️ Разговор уже начат другим оператором.", show_alert=True)
+        return
+
+    # Помечаем чат как активный
+    active_chats[target_user_id]["operator_id"] = caller_id
+    active_chats[target_user_id]["status"] = "active"
+    active_chats[target_user_id]["role"] = "user"
+    # Обратная ссылка: оператор → пользователь
+    active_chats[caller_id] = {
+        "operator_id": caller_id,
+        "user_id": target_user_id,
+        "role": "operator",
+        "status": "active"
+    }
+
+    # Убираем кнопку из сообщения в группе
+    try:
+        await callback_query.message.edit_reply_markup(reply_markup=None)
+        await callback_query.message.reply(
+            f"✅ Оператор <a href=\"tg://user?id={caller_id}\">{caller_id}</a> принял заявку.",
+            parse_mode="HTML"
+        )
+    except:
+        pass
+
+    await callback_query.answer()
+
+    privilege_name = chat_data.get("privilege", "—")
+
+    # Уведомляем пользователя
+    user_states[target_user_id] = "in_operator_chat"
+    try:
+        await bot.send_message(
+            target_user_id,
+            "✅ Модератор на связи! Можете общаться.\n\n"
+            "Пишите сообщения — они будут переданы модератору.\n"
+            "Нажмите «🔚 Закончить разговор», чтобы завершить.",
+            reply_markup=get_end_chat_keyboard()
+        )
+    except Exception as e:
+        logger.error(f"Не удалось уведомить пользователя {target_user_id}: {e}")
+
+    # Уведомляем оператора в личке
+    user_states[caller_id] = "in_operator_chat"
+    try:
+        await bot.send_message(
+            caller_id,
+            f"💬 Разговор начат!\n\n"
+            f"<b>Пользователь:</b> {target_user_id}\n"
+            f"<b>Привилегия:</b> {privilege_name}\n\n"
+            f"Пишите сообщения — они будут переданы пользователю.\n"
+            f"Нажмите «🔚 Закончить разговор», чтобы завершить.",
+            parse_mode="HTML",
+            reply_markup=get_end_chat_keyboard()
+        )
+    except Exception as e:
+        logger.error(f"Не удалось уведомить оператора {caller_id}: {e}")
+
+
+@dp.message(lambda m: m.text == "🔚 Закончить разговор")
+async def end_chat_button(message: Message):
+    """Пользователь или оператор завершает разговор."""
+    user_id = message.from_user.id
+    chat_data = active_chats.get(user_id)
+
+    if not chat_data:
+        user_states[user_id] = None
+        await message.answer("✅ Действие отменено", reply_markup=get_main_keyboard())
+        return
+
+    role = chat_data.get("role", "user")
+
+    if role == "operator":
+        # Оператор завершает — находим пользователя
+        target_user_id = chat_data.get("user_id")
+        operator_id = user_id
+
+        # Очищаем обе стороны
+        active_chats.pop(operator_id, None)
+        active_chats.pop(target_user_id, None)
+        user_states[operator_id] = None
+        if target_user_id:
+            user_states[target_user_id] = None
+
+        await message.answer("✅ Разговор завершён.", reply_markup=get_main_keyboard())
+
+        if target_user_id:
+            try:
+                await bot.send_message(
+                    target_user_id,
+                    "🔚 Модератор завершил разговор.\n\nЕсли остались вопросы — напишите нам снова.",
+                    reply_markup=get_main_keyboard()
+                )
+            except Exception as e:
+                logger.error(f"Не удалось уведомить пользователя о завершении: {e}")
+
+    else:
+        # Пользователь завершает
+        operator_id = chat_data.get("operator_id")
+        target_user_id = user_id
+
+        active_chats.pop(target_user_id, None)
+        if operator_id:
+            active_chats.pop(operator_id, None)
+            user_states[operator_id] = None
+        user_states[target_user_id] = None
+
+        await message.answer("✅ Разговор завершён.", reply_markup=get_main_keyboard())
+
+        if operator_id:
+            try:
+                await bot.send_message(
+                    operator_id,
+                    "🔚 Пользователь завершил разговор.",
+                    reply_markup=get_main_keyboard()
+                )
+            except Exception as e:
+                logger.error(f"Не удалось уведомить оператора о завершении: {e}")
+
 
 # ==================== АДМИН КОМАНДЫ ====================
 def is_admin(user_id: int) -> bool:
@@ -1481,6 +1722,60 @@ async def _do_translate(user_id, file_path, target_language, target_lang_name, m
 @dp.message()
 async def handle_presentation_prompt(message: Message):
     user_id = message.from_user.id
+
+    # ── Ретрансляция сообщений в чате с оператором ──
+    if user_states.get(user_id) == "in_operator_chat":
+        chat_data = active_chats.get(user_id)
+        if not chat_data:
+            user_states[user_id] = None
+            await message.answer("✅ Разговор завершён.", reply_markup=get_main_keyboard())
+            return
+
+        role = chat_data.get("role", "user")
+
+        if role == "operator":
+            target_id = chat_data.get("user_id")
+            sender_label = "👤 Модератор"
+        else:
+            target_id = chat_data.get("operator_id")
+            sender_label = f"👤 Пользователь <a href='{user_id}'>{user_id}</a>"
+
+        if not target_id:
+            await message.answer("⚠️ Оператор ещё не принял заявку. Ожидайте.")
+            return
+
+        try:
+            if message.photo:
+                # Пересылаем фото с подписью
+                caption = message.caption or ""
+                caption_with_label = f"{sender_label}: {caption}" if caption else f"{sender_label}:"
+                await bot.send_photo(
+                    target_id,
+                    photo=message.photo[-1].file_id,
+                    caption=caption_with_label,
+                    parse_mode='HTML'
+                )
+            elif message.text:
+                await bot.send_message(
+                    target_id,
+                    f"{sender_label}: {message.text}",
+                    parse_mode='HTML'
+                )
+            else:
+                await message.answer("⚠️ Поддерживаются только текстовые сообщения и фотографии.")
+                return
+        except Exception as e:
+            logger.error(f"Ошибка пересылки сообщения в чате: {e}")
+            await message.answer("❌ Не удалось доставить сообщение.")
+        return
+
+    # ── Пользователь ждёт оператора (заявка отправлена, но не принята) ──
+    if user_states.get(user_id) == "waiting_for_operator":
+        await message.answer(
+            "⏳ Ожидайте — модератор скоро выйдет на связь.\nНажмите «🔚 Закончить разговор», чтобы отменить.",
+            reply_markup=get_end_chat_keyboard()
+        )
+        return
 
     if user_states.get(user_id) == "waiting_for_report":
         report_text = message.text.strip()
