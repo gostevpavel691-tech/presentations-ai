@@ -42,7 +42,7 @@ from user_manager import DatabaseManager
 # ==================== НАСТРОЙКИ ====================
 BOT_TOKEN = config.BOT_TOKEN
 MISTRAL_API_KEY = config.MISTRAL_API_KEY
-UNSPLASH_ACCESS_KEY = config.UNSPLASH_API_TOKEN
+PEXELS_API_KEY = config.PEXELS_API_KEY
 
 # Пути (оставлены как есть, вы измените сами)
 BASE_PATH = os.path.dirname(os.path.abspath(__file__)) + os.sep
@@ -90,6 +90,8 @@ user_states = {}
 # Формат: { user_id: {"original_request": str, "error_text": str} }
 retry_data = {}
 prem_user_images_enabled = {}  # {user_id: True/False}
+prem_user_custom_images = {}   # {user_id: "запрос пользователя" | None}
+user_templates_enabled = {}    # {user_id: True/False} — для всех пользователей
 
 # ==================== АНТИ-СПАМ СИСТЕМА ====================
 user_last_action = {}
@@ -193,10 +195,15 @@ translate_pending = {}
 
 def get_cancel_keyboard(user_id=None):
     buttons = [[KeyboardButton(text="❌ Отмена")]]
-    if user_id and (db_manager.is_premium(user_id) or db_manager.is_moderator(user_id) or is_admin(user_id)):
-        status = prem_user_images_enabled.get(user_id, True)
-        btn_text = "Изображения включены ✅" if status else "Изображения выключены ⛔"
-        buttons.append([KeyboardButton(text=btn_text)])
+    if user_id:
+        tmpl_status = user_templates_enabled.get(user_id, True)
+        tmpl_text = "Шаблоны включены ✅" if tmpl_status else "Шаблоны выключены ⛔"
+        buttons.append([KeyboardButton(text=tmpl_text)])
+        if db_manager.is_premium(user_id) or db_manager.is_moderator(user_id) or is_admin(user_id):
+            img_status = prem_user_images_enabled.get(user_id, True)
+            img_text = "Изображения включены ✅" if img_status else "Изображения выключены ⛔"
+            buttons.append([KeyboardButton(text=img_text)])
+            buttons.append([KeyboardButton(text="✍🏼 Указать изображения")])
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True, one_time_keyboard=False)
 
 def remove_keyboard():
@@ -214,15 +221,16 @@ INSTRUCTION = """
 - НЕ используй внешние изображения, add_picture и любые картинки — их нет на сервере
 - НЕ используй несуществующие атрибуты: вместо fill.fore_color используй fill.solid() затем fill.fore_color
 - НЕ импортируй сторонние библиотеки кроме pptx и стандартных (os, random, math и т.д.)
-- для красоты используй: цветные фоны слайдов, градиентны, иконки из символов (✓ ★ → и т.д. <- по желанию!), красивые шрифты и размеры
+- для красоты используй цветные фоны слайдов, градиенты, красивые шрифты и размеры
 - по желанию можешь использовать разделители под заголовками в виде низких прямоугольников
+- символы-маркеры (✓, •, ★ и т.д.) используй только там, где это уместно по смыслу — не добавляй их везде принудительно
 
 Не используй символ "→"
 Отвечай ТОЛЬКО кодом на Python, без объяснений. Код должен быть готов к выполнению.
 Постарайся сделать все без ошибок!
 """
 
-INSTRUCTION_PREMIUM = f"""
+INSTRUCTION_PREMIUM = """
 Ты — эксперт по созданию презентаций с помощью библиотеки python-pptx.
 
 Твоя задача — заполнить этот шаблон своими данными (заголовками, текстом, списками).
@@ -234,51 +242,100 @@ INSTRUCTION_PREMIUM = f"""
 %s
 
 ПРАВИЛА:
-- по желанию можешь использовать под заголовками разделители в виде прямоугольников низкой высоты
-- В папке с презентацией лежат картинки: img_0.jpg, img_1.jpg, img_2.jpg
 - Замени НАЗВАНИЕ ПРЕЗЕНТАЦИИ, Подзаголовок, ЗАГОЛОВОК СЛАЙДА на свои
-- Замени пункты списка на свои (сохраняя формат "•") - но это по желанию, можешь не использовать "•" если в этом нет надобности.
+- Замени пункты списка на свои, сохраняя стиль оформления шаблона
 - Можешь добавить больше слайдов по тому же принципу
 - Можешь использовать разные картинки: img_0.jpg, img_1.jpg, img_2.jpg
-- НЕ используй несуществующие атрибуты: вместо fill.fore_color используй fill.solid()
+- Символы-маркеры (•, ✓, ▸ и т.д.) используй только там, где это уместно — не везде принудительно
+- По желанию добавляй разделители под заголовками в виде низких прямоугольников
+- НЕ используй несуществующие атрибуты: вместо fill.fore_color сначала fill.solid()
 - НЕ импортируй сторонние библиотеки кроме pptx, os
-- Для красоты добавляй цветные фоны, градиенты, прямоугольники
 
 Не используй символ "→"
 Отвечай ТОЛЬКО кодом на Python. Код должен быть готов к выполнению.
-ПОСТАРАЙСЯ сделать все без ошибок! Пожалуйста!
+Постарайся сделать всё без ошибок! Пожалуйста!
+"""
+
+INSTRUCTION_TEMPLATES = """
+Ты — эксперт по созданию презентаций с помощью библиотеки python-pptx.
+
+Твоя задача — заполнить этот шаблон своими данными (заголовками, текстом, списками).
+
+Создай файл "presentation.pptx" в текущей директории.
+
+ВОТ ШАБЛОН, КОТОРЫЙ ТЫ ОБЯЗАН ИСПОЛЬЗОВАТЬ:
+
+%s
+
+ПРАВИЛА:
+- Обязательно используй предоставленный шаблон как основу
+- Замени НАЗВАНИЕ ПРЕЗЕНТАЦИИ, Подзаголовок, ЗАГОЛОВОК СЛАЙДА на свои
+- Замени пункты списков на свои, сохраняя стиль оформления шаблона
+- Можешь добавлять дополнительные слайды по тому же принципу
+- Символы-маркеры (✓, ▸, • и т.д.) используй только там, где это уместно по смыслу — не везде принудительно
+- По желанию добавляй разделители под заголовками в виде низких прямоугольников
+
+ЗАПРЕЩЕНО:
+- НЕ используй add_picture и любые картинки
+- НЕ используй несуществующие атрибуты (вместо fill.fore_color сначала используй fill.solid())
+- НЕ импортируй сторонние библиотеки кроме pptx и стандартных
+- НЕ используй символ "→"
+
+Отвечай ТОЛЬКО кодом на Python, без объяснений. Код должен быть готов к выполнению.
+Постарайся сделать всё без ошибок! Пожалуйста!
 """
 
 # ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
-async def download_unsplash_images(query: str, work_dir: str, count: int = 3) -> bool:
-    """Скачивает картинки с Unsplash в work_dir. Возвращает True если хоть одна скачалась."""
+async def download_images(query: str, work_dir: str, count: int = 3) -> bool:
+    """Скачивает картинки с Pexels в work_dir. Возвращает True если хоть одна скачалась.
+    Разбивает запрос по запятой и ищет каждое ключевое слово отдельно.
+    Если слов меньше чем count — недостающие фото добираются повторными запросами с разных страниц."""
     try:
         import aiohttp
-        url = "https://api.unsplash.com/photos/random"
-        params = {"query": query, "count": count, "orientation": "landscape"}
-        headers = {"Authorization": f"Client-ID {UNSPLASH_ACCESS_KEY}"}
+        url = "https://api.pexels.com/v1/search"
+        headers = {"Authorization": PEXELS_API_KEY}
 
+        # Разбиваем по запятой, чистим пробелы
+        keywords = [k.strip() for k in query.split(",") if k.strip()]
+        if not keywords:
+            keywords = [query.strip()]
+        keywords = keywords[:count]
+
+        # Если слов меньше count — дублируем чтобы набрать count запросов
+        # Например: ["горы"] → ["горы", "горы", "горы"] при count=3
+        tasks = []
+        for i in range(count):
+            keyword = keywords[i % len(keywords)]
+            page = (i // len(keywords)) + 1  # разные страницы чтобы фото не повторялись
+            tasks.append((keyword, page))
+
+        downloaded = 0
         async with aiohttp.ClientSession() as session:
-            async with session.get(url, params=params, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as resp:
-                if resp.status != 200:
-                    logger.error(f"Unsplash API error: {resp.status}")
-                    return False
-                photos = await resp.json()
+            for i, (keyword, page) in enumerate(tasks):
+                params = {"query": keyword, "per_page": 1, "page": page, "orientation": "landscape"}
+                async with session.get(url, params=params, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                    if resp.status != 200:
+                        logger.warning(f"Pexels API error {resp.status} для '{keyword}' стр.{page}")
+                        continue
+                    data = await resp.json()
 
-            downloaded = 0
-            for i, photo in enumerate(photos):
-                img_url = photo["urls"]["regular"]
+                photos = data.get("photos", [])
+                if not photos:
+                    logger.warning(f"Pexels: нет результатов для '{keyword}' стр.{page}")
+                    continue
+
+                img_url = photos[0]["src"]["large"]
                 async with session.get(img_url, timeout=aiohttp.ClientTimeout(total=20)) as img_resp:
                     if img_resp.status == 200:
-                        img_path = os.path.join(work_dir, f"img_{i}.jpg")
+                        img_path = os.path.join(work_dir, f"img_{downloaded}.jpg")
                         with open(img_path, "wb") as f:
                             f.write(await img_resp.read())
                         downloaded += 1
 
-        logger.info(f"Unsplash: скачано {downloaded} картинок для запроса '{query}'")
+        logger.info(f"Pexels: скачано {downloaded} картинок для запроса '{query}'")
         return downloaded > 0
     except Exception as e:
-        logger.error(f"Ошибка загрузки картинок Unsplash: {e}")
+        logger.error(f"Ошибка загрузки картинок Pexels: {e}")
         return False
 
 def extract_python_code(text):
@@ -1232,10 +1289,20 @@ async def _process_presentation_request_internal(user_id, request, message):
         images_downloaded = False
         if is_premium and images_enabled:
             status_msg = await message.answer("🖼 Подбираю картинки для презентации...")
-            images_downloaded = await download_unsplash_images(request, work_dir, count=3)
+            img_query = prem_user_custom_images.get(user_id) or request
+            images_downloaded = await download_images(img_query, work_dir, count=3)
+            prem_user_custom_images.pop(user_id, None)
             await status_msg.delete()
         
-        instruction = INSTRUCTION_PREMIUM % random.choice([consts.TEMPLATE1, consts.TEMPLATE2]) if (is_premium and images_downloaded) else INSTRUCTION
+        templates_enabled = user_templates_enabled.get(user_id, True)
+
+        if is_premium and images_downloaded:
+            instruction = INSTRUCTION_PREMIUM % random.choice(consts.TEMPLATES_PREMIUM)
+        elif templates_enabled:
+            instruction = INSTRUCTION_TEMPLATES % random.choice(consts.TEMPLATES_FREE)
+        else:
+            instruction = INSTRUCTION
+
         status_msg = await message.answer("🔄 Генерирую код презентации...")
 
         def sync_mistral_call():
@@ -1364,10 +1431,11 @@ async def cmd_start(message: Message):
     
     await message.answer(
         "👋 Привет! Я бот для создания презентаций с помощью ИИ.\n\n"
-        "📌 Нажми на кнопку ➕ Создать, чтобы начать создание презентации\n"
-        "👑 Нажми на кнопку Привилегии, чтобы узнать о Premium доступе\n"
-        "👤 Нажми на кнопку Мой профиль, чтобы узнать свой статус\n"
-        "🐛 Нажми на кнопку Сообщить об ошибке, чтобы сообщить о найденной ошибке\n\n"
+        "➕ Создать — создать новую презентацию\n"
+        "✏️ Изменить — перевести существующую презентацию на другой язык\n"
+        "👑 Привилегии — узнать о Premium доступе\n"
+        "👤 Мой профиль — посмотреть свой статус\n"
+        "🐛 Сообщить об ошибке — написать о найденной проблеме\n\n"
         "🔧 Доступные команды:\n"
         "/start - главное меню",
         reply_markup=get_main_keyboard()
@@ -1487,11 +1555,48 @@ async def my_profile_button(message: Message):
     
     await message.answer(profile_text, reply_markup=get_main_keyboard())
 
+@dp.message(lambda m: m.text in ("Шаблоны включены ✅", "Шаблоны выключены ⛔"))
+async def toggle_templates_button(message: Message):
+    user_id = message.from_user.id
+    user_templates_enabled[user_id] = not user_templates_enabled.get(user_id, True)
+    await message.answer("✅ Настройка сохранена.", reply_markup=get_cancel_keyboard(user_id))
+
 @dp.message(lambda m: m.text in ("Изображения включены ✅", "Изображения выключены ⛔"))
 async def toggle_images_button(message: Message):
     user_id = message.from_user.id
     prem_user_images_enabled[user_id] = not prem_user_images_enabled.get(user_id, True)
     await message.answer("✅ Настройка сохранена.", reply_markup=get_cancel_keyboard(user_id))
+
+@dp.message(lambda m: m.text == "✍🏼 Указать изображения")
+async def specify_images_button(message: Message):
+    user_id = message.from_user.id
+    user_states[user_id] = "waiting_for_image_query"
+    current = prem_user_custom_images.get(user_id)
+    current_str = f"\n\nТекущий запрос: <b>{current}</b>" if current else ""
+    await message.answer(
+        f"🖼 Введите от 1 до 3 изображений, которые вы хотите видеть в вашей презентации.\n"
+        f"Например: <i>горы, закат, природа</i>{current_str}\n\n"
+        f"⚠️ Фотографии берутся из открытых источников, поэтому могут не точно соответствовать запросу.\n\n"
+        f"Если ничего не найдётся — картинки подберутся по теме презентации.\n"
+        f"Нажмите «❌ Отмена» чтобы оставить всё как есть.",
+        parse_mode="HTML",
+        reply_markup=get_cancel_keyboard()
+    )
+
+@dp.message(lambda m: m.from_user and user_states.get(m.from_user.id) == "waiting_for_image_query")
+async def handle_image_query_input(message: Message):
+    user_id = message.from_user.id
+    text = (message.text or "").strip()
+    if not text:
+        await message.answer("❌ Пустой запрос. Введите текст или нажмите «❌ Отмена».")
+        return
+    prem_user_custom_images[user_id] = text
+    user_states[user_id] = "waiting_for_prompt"
+    await message.answer(
+        f"✅ Запрос сохранён: <b>{text}</b>\n\nТеперь введите тему презентации.",
+        parse_mode="HTML",
+        reply_markup=get_cancel_keyboard(user_id)
+    )
 
 @dp.message(lambda message: message.text == "❌ Отмена")
 async def cancel_button(message: Message):
